@@ -1,0 +1,702 @@
+#!/bin/sh
+
+# Zen Installer Framework version 2.00
+#
+# Written by Jody James
+#
+#
+#Maintained by Josiah Ward(aka spookykidmm)
+#
+# This program is free software, provided under the GNU General Public License
+# as published by the Free Software Foundation. So feel free to copy, distribute,
+# or modify it as you wish.
+#
+# Special Recognition to Carl Duff, as some code was adapted from the Architect Installer
+# Special Recognition to 'angeltoast' as some code was adapted from the Feliz Installer
+#
+#
+#Pulling dependencies
+sudo pacman -Syy
+sudo pacman -S --noconfirm arch-install-scripts archiso pacman-contrib zenity gparted
+
+# Selecting the Drive
+man_partition() {
+list=` lsblk -lno NAME,TYPE,SIZE,MOUNTPOINT | grep "disk" `
+
+zenity --info --height=500 width=450 --title="$title" --text "Abaixo esta uma lista das unidades disponiveis no seu sistema\n\n$list" 
+
+lsblk -lno NAME,TYPE | grep 'disk' | awk '{print "/dev/" $1 " " $2}' | sort -u > devices.txt
+sed -i 's/\<disk\>//g' devices.txt
+devices=` awk '{print "FALSE " $0}' devices.txt `
+
+dev=$(zenity --list --radiolist --height=500 --width=450 --title="$title" --text "Selecione a unidade que voce deseja usar para a instalação:" --column Drive --column Info $devices)
+
+# Partitioning
+# Allow user to partition using gparted
+zenity --question --height=500 --width=450 --title="$title" --text "Você precisa de uma partição $dev?\nSelecione 'sim' para abrir o gparted e particionar \no disco ou formatar partições se necessário.\nO instalador não vai formatar a partição depois disso,\nentão se sua partição precisa ser formatada por favor selecione sim\nou use o gparted para formatá-las agora.\nO instalador permite as partições /boot /home e /root separadas, assim como a partição swap ou arquivo swap"
+if [ "$?" = "0" ]
+	then gparted
+fi
+
+	# Select root partition
+	root_part=$(zenity --list --radiolist --height=500 --width=450 --title="$title" --text="Escolha uma partição para usar como partição root\nCuidado, essa lista mostra todas as partições disponíveis em todas as unidades disponíveis.\nEscolha com cuidado." --column ' ' --column Partitions $(sudo fdisk -l | grep dev | grep -v Disk | awk '{print $1}' | awk '{ printf " FALSE ""\0"$0"\0" }'))
+	#mounting root partition
+touch root_part.txt    
+echo $root_part >> root_part.txt
+	mount $root_part /mnt
+
+	# Swap partition?
+	zenity --question --height=500 --width=450 --title="$title" --text "Você quer usar uma partição de swap?"
+		if [ "$?" = "0" ]
+		then swap_part=$(zenity --list  --radiolist --height=500 --width=450 --title="$title" --text="Escolha uma partição para usar como partição de swap\nCuidado, essa lista mostra todas as partições em todas as unidades.\nEscolha com cuidado." --column ' ' --column 'Partitions' $(sudo fdisk -l | grep dev | grep -v Disk | awk '{print $1}' | awk '{ printf " FALSE ""\0"$0"\0" }'))
+		mkswap $swap_part
+		swapon $swap_part
+		fi
+	zenity --question --height=500 --width=450 --title="$title" --text "Você gostaria de criar um arquivo swap de 1GB na raiz?\nSe você ja montou uma partição swap ou não quer swap, selecione \"Não\".\nEsse processo pode demorar um pouco, por favor seja paciente."
+		if [ "$?" = "0" ]
+	 	then swapfile="yes"
+		(echo "# Criando arquivo swap..."
+		touch /mnt/swapfile
+		dd if=/dev/zero of=/mnt/swapfile bs=1M count=1024
+		chmod 600 /mnt/swapfile
+		mkswap /mnt/swapfile
+		swapon /mnt/swapfile) | zenity --progress --title="$title" --width=450 --pulsate --auto-close --no-cancel
+		fi
+
+	# Boot Partition?
+	zenity --question --height=500 --width=450 --title="$title" --text "Do you want to use a seperate boot partition?" 
+		if [ "$?" = "0" ]
+		then boot_part=$(zenity --list --radiolist --height=500 --width=450 --title="$title" --text="Selecione a partição para o /boot. Esta lista mostra todas as unidades disponíveis em seu sistema, escolha com cuidado." --column ' ' --column Partitions $(sudo fdisk -l | grep dev | grep -v Disk | awk '{print $1}' | awk '{ printf " FALSE ""\0"$0"\0" }'))
+
+		mkdir -p /mnt/boot
+		mount $boot_part /mnt/boot
+
+		fi
+
+	# Home Partition?
+	zenity --question --height=500 --width=450 --title="$title" --text "Você gostaria de usar uma partição home separada?" 
+		if [ "$?" = "0" ]
+		then home_part=$(zenity --list --radiolist --height=500 --width=450 --title="$title" --text="Selecione sua partição home" --column ' ' --column Partitions $(sudo fdisk -l | grep dev | grep -v Disk | awk '{print $1}' | awk '{ printf " FALSE ""\0"$0"\0" }'))
+		# mounting home partition
+		mkdir -p /mnt/home
+		mount $home_part /mnt/home
+		fi
+}
+
+auto_partition() {
+	list=` lsblk -lno NAME,TYPE,SIZE,MOUNTPOINT | grep "disk" `
+
+	zenity --info --height=500 --width=450 --title="$title" --text "Abaixo esta uma lista das unidades disponiveis no seu sistema\n\n$list" 
+
+	lsblk -lno NAME,TYPE | grep 'disk' | awk '{print "/dev/" $1 " " $2}' | sort -u > devices.txt
+	sed -i 's/\<disk\>//g' devices.txt
+	devices=` awk '{print "FALSE " $0}' devices.txt `
+
+	dev=$(zenity --list  --radiolist --height=500 --width=450 --title="$title" --text "Selecione a unidade que voce deseja usar para a instalação:" --column Drive --column Info $devices)
+
+	zenity --question --height=500 --width=450 --title="$title" --text "Cuidado! Isso vai apagar todos os dados no $dev\!\nVocê tem certeza que deseja continuar?\nSelecione 'Sim' para continuar ou 'Não' para voltar."
+        yn="$?"
+        touch root_part.txt
+        if [ "$SYSTEM" = "BIOS" ]
+	then echo {$dev}1 >> root_part.txt
+	else echo {$dev}2 >> root_part.txt
+        fi 
+	if [ "$yn" = "1" ]
+	then partition
+	fi
+
+	# Find total amount of RAM
+	ram=$(grep MemTotal /proc/meminfo | awk '{print $2/1024}' | sed 's/\..*//')
+	# Find where swap partition stops
+	num=4000
+
+	if [ "$ram" -gt "$num" ]
+		then swap_space=4096
+		else swap_space=$ram
+	fi
+	
+	uefi_swap=$(($swap_space + 513))
+
+
+	#BIOS or UEFI
+    if [ "$SYSTEM" = "BIOS" ]
+        then
+	       (echo "# Creating Partitions for BIOS..."
+	        dd if=/dev/zero of=$dev bs=512 count=1
+	        Parted "mklabel msdos"
+	        Parted "mkpart primary ext4 1MiB 100%"
+	        Parted "set 1 boot on"
+	        mkfs.ext4 -F ${dev}1
+	        mount ${dev}1 /mnt
+		touch /mnt/swapfile
+		dd if=/dev/zero of=/mnt/swapfile bs=1M count=${swap_space}
+		chmod 600 /mnt/swapfile
+		mkswap /mnt/swapfile
+		swapon /mnt/swapfile
+		swapfile="yes") | zenity --progress --title="$title" --width=450 --pulsate --auto-close --no-cancel
+	    else
+            	(echo "# Creating Partitions for UEFI..."
+            	dd if=/dev/zero of=$dev bs=512 count=1
+            	Parted "mklabel gpt"
+            	Parted "mkpart primary fat32 1MiB 513MiB"
+		Parted "mkpart primary ext4 513MiB 100%"
+		Parted "set 1 boot on"
+		mkfs.fat -F32 ${dev}1
+		mkfs.ext4 -F ${dev}2
+		mount ${dev}2 /mnt
+		mkdir -p /mnt/boot
+		mount ${dev}1 /mnt/boot
+		touch /mnt/swapfile
+		dd if=/dev/zero of=/mnt/swapfile bs=1M count=${swap_space}
+		chmod 600 /mnt/swapfile
+		mkswap /mnt/swapfile
+		swapon /mnt/swapfile
+		swapfile="yes") | zenity --progress --title="$title" --width=450 --pulsate --auto-close --no-cancel
+	fi
+			
+}
+
+partition() {
+	ans=$(zenity --list --radiolist --height=500 --width=450 --title="$title" --text "Você gostaria de usar o particionamento automático ou você gostaria de particionar o disco manualmente?\nParticionamento Automático  will completely erase the disk that you selecione and instalar Arch." --column Selecione --column Choice FALSE "Automatic Partitioning" FALSE "Manual Partitioning")
+
+	if [ "$ans" = "Automatic Partitioning" ]
+	then auto_partition
+	else
+	man_partition
+	fi
+
+}
+
+configure() {
+# Getting Locale
+country=$(zenity --list --radiolist --title="$title" --height=500 --width=450 --column Select --column Country --text="Selecione o código do seu país. Isso vai ser usado para encontrar os mirrors mais rápidos para você." FALSE all FALSE AU FALSE AT FALSE BD FALSE BY FALSE BE FALSE BA FALSE BR FALSE BG FALSE CA FALSE CL FALSE CN FALSE CO FALSE HR FALSE CZ FALSE DE FALSE DK FALSE EE FALSE ES FALSE FR FALSE GB FALSE HU FALSE IE FALSE IL FALSE IN FALSE IT FALSE JP FALSE KR FALSE KZ FALSE LK FALSE LU FALSE LV FALSE MK FALSE NL FALSE NO FALSE NZ FALSE PT FALSE RO FALSE RS FALSE RU FALSE SU FALSE SG FALSE SK FALSE TR FALSE TW FALSE UA FALSE US FALSE UZ FALSE VN FALSE ZA)
+locales=$(cat /etc/locale.gen | grep -v "#  " | sed 's/#//g' | sed 's/ UTF-8//g' | grep .UTF-8 | sort | awk '{ printf "FALSE ""\0"$0"\0" }')
+
+locale=$(zenity --list --radiolist --height=500 --width=450 --title="$title" --text "Selecione seu local/idioma.\nO padrão é Inglês Americano 'en_US.UTF-8'." --column Select --column Locale TRUE en_US.UTF-8 $locales)
+
+zenity --question --height=500 --width=450 --title="$title" --text="Você gostaria de alterar o modelo do seu teclado? O padrão é pc105"
+mod="$?"
+
+if [ "$mod" = "0" ]
+then model=$(zenity --list --radiolist --height=500 --width=450 --title="$title" --text="Selecione o modelo do seu teclado" --column Select --column Model $(localectl list-x11-keymap-models | awk '{ printf " FALSE ""\0"$0"\0" }'))
+fi
+
+layout=$(zenity --list --radiolist --height=500 --width=450 --title="$title" --text="Selecione o seu layout, um código de país de dois caracteres" --column Select --column Layout $(localectl list-x11-keymap-layouts | awk '{ printf " FALSE ""\0"$0"\0" }'))
+
+zenity --question --height=500 --width=450 --title="$title" --text="Selecione o layout de teclado, digitando o código de país com duas letras"
+vary="$?"
+
+if [ "$vary" = "0" ]
+then variant=$(zenity --list --radiolist --height=500 --width=450 --title="$title" --text="Você gostaria de mudar a variante do teclado?" --column Select --column Variant $(localectl list-x11-keymap-variants | awk '{ printf " FALSE ""\0"$0"\0" }'))
+fi
+
+zenity --question --height=500 --width=450 --title="$title" --text="Selecione sua variante preferida"
+map="$?"
+
+if [ "$map" = "1" ]
+then keymap=$(zenity --list --radiolist --height=500 --width=450 --title="$title" --text="Selecione o seu keymap" --column Select --column Keymap $(localectl list-keymaps | awk '{ printf " FALSE ""\0"$0"\0" }'))
+loadkeys $keymap
+fi
+
+setxkbmap $layout
+
+if [ "$model" = "0" ] 
+then setxkbmap -model $model 
+fi
+
+if [ "$vary" = "0" ] 
+then setxkbmap -variant $variant
+fi
+# Getting Timezone
+zones=$(cat /usr/share/zoneinfo/zone.tab | awk '{print $3}' | grep "/" | sed "s/\/.*//g" | sort -ud | sort | awk '{ printf " FALSE ""\0"$0"\0" }')
+
+zone=$(zenity --list --radiolist --height=500 --width=450 --title="$title" --text "Selecione o seu país/zona." --column Select --column Zone $zones)
+
+subzones=$(cat /usr/share/zoneinfo/zone.tab | awk '{print $3}' | grep "$zone/" | sed "s/$zone\///g" | sort -ud | sort | awk '{ printf " FALSE ""\0"$0"\0" }')
+
+subzone=$(zenity --list --radiolist --height=500 --width=450 --title="$title" --text "Selecione a sua subzona" --column Select --column Zone $subzones)
+
+# Getting Clock Preference
+clock=$(zenity --list --radiolist --height=500 --width=450 --title="$title" --text "Você gostaria de usar UTC ou Horário Local\nUTC é recomendado a não ser que você esteja fazendo dual boot com windows." --column Select --column Time TRUE utc FALSE localtime)
+
+# Getting hostname, username, root password, and user password
+hname=$(zenity --entry --title="$title" --text "Digite um hostname para seu sistema.\nTodas as letras devem ser minúsculas." --entry-text "revenge")
+
+username=$(zenity --entry --title="$title" --text "Digite um nome de usuário.\nDe novo, todas as letras minúsculas." --entry-text "user")
+}
+
+vbox() {
+graphics=$(lspci | grep -i "vga" | sed 's/.*://' | sed 's/(.*//' | sed 's/^[ \t]*//')
+if [[ $(echo $graphics | grep -i 'virtualbox') != "" ]]
+	then zenity --question --height=500 --width=450 --title="$title" --text "O Instalador Zen detectou que você está atualmente rodando no VirtualBox.\nVocê gostaria de instalar as utilidades do VirtualBox no sistema instalado?"
+vb="$?"
+fi
+}
+
+nvidia() {
+graphics=$(lspci | grep -i "vga" | sed 's/.*://' | sed 's/(.*//' | sed 's/^[ \t]*//')
+card=$(lspci -k | grep -A 2 -E "(VGA|3D)")
+if [[ $(echo $card | grep -i 'nvidia') != "" ]]
+	then zenity --question --height=500 --width=450 --title="$title" --text "O Instalador Zen detectou que você está atualmente usando placa de vídeo da Nvidia.\nVocê gostaria de instalar os drivers proprietários da Nvidia no sistema instalado?"
+		if [ "$?" = "0" ]
+			then video=$(zenity --list  --checklist --height=500 --width=450 --title="$title" --text "Você vai precisar saber qual modelo da placa de vídeo da Nvidia você está usando.\nPara NVIDIA 400 series e mais novo, instale nvidia e nvidia-libgl.\nPara 8000-9000 ou 100-300 series instale nvidia-304xx e nvidia-304xx-libgl.\n\nSua placa de vídeo atual é:\n$card\n\nSelecione os drivers da NVIDIA que você gostaria de instalar." --column "Select" --column "Driver" FALSE "nvidia nvidia-utils nvidia-settings" FALSE "nvidia-304xx nvidia-304xx-utils nvidia-settings" FALSE "nvidia-340xx nvidia-340xx-utils nvidia-settings" FALSE "nvidia-lts nvidia-settings nvidia-utils" FALSE "nvidia-340xx-lts nvidia-340xx-utils nvidia-settings" FALSE "nvidia-304xx-lts nvidia-304xx-utils nvidia-settings" FALSE "nvidia-dkms" FALSE "nvidia-340xx-dkms" FALSE "nvidia-304xx-dkms")
+			else video="mesa xf86-video-nouveau"
+		fi
+	else video="mesa xf86-video-nouveau"
+fi
+}
+
+kernel() {
+kernel=$(zenity --list  --radiolist --height=500 --width=450 --title="$title" --text "Existem vários kerneis disponíveis para o sistema.\n\nO mais comum é o atual kernel linux.\nEsse kernel é o mais atualizado, providenciando o melhor suporte de hardware.\nContudo, pode haver possíveis bugs nesse kernel, apesar dos testes.\n\nO kernel linux-lts providencia um foco em estabilidade.\nEle é baseado em um kernel mais antigo, então pode faltar as novas funcionalidades.\n\nO kernel linux-hardened é focado em segurança\nEle contém o Grsecurity Patchset e PaX para aumentar a segurança.\n\nO kernel linux-zen é o resultado de uma colaboração de hackers de kernel\npara promover o melhor kernel possível para o sistemas de todo dia.\n\nPor favor selecione o kernel que você gostaria de instalar." --column "Select" --column "Kernel" FALSE linux FALSE linux-lts FALSE linux-hardened FALSE linux-zen)
+}
+
+root_password() {
+rtpasswd=$(zenity --entry --title="$title" --text "Por favor digite a senha do usuário root." --hide-text)
+rtpasswd2=$(zenity --entry --title="$title" --text "Por favor digite novamente a senha do usuário root." --hide-text)
+	if [ "$rtpasswd" != "$rtpasswd2" ]
+		then zenity --error --height=500 --width=450 --title="$title" --text "As senhas não se coincidem, por favor tente novamente."
+		root_password
+	fi
+}
+
+changeshell() {
+shell=$(zenity --list --radiolist --height=500 --width=450 --title="$title" --text "Qual shell você gostaria de usar?" --column Select --column Choice FALSE bash FALSE zsh FALSE fish)
+}
+
+user_password() {
+userpasswd=$(zenity --entry --title="$title" --text "Por favor digite a senha do usuário $username." --hide-text)
+userpasswd2=$(zenity --entry --title="$title" --text "Por favor digite novamente a senha do usuário $username." --hide-text)
+	if [ "$userpasswd" != "$userpasswd2" ]
+		then zenity --error --height=500 --width=450 --title="$title" --text "As senhas não se coincidem, por favor tente novamente."
+		user_password
+	fi
+}
+
+cups() {
+zenity --question --height=500 --width=450 --title="$title" --text "Você gostaria de instalar suporte à impressora?"
+cp="$?"
+}
+
+desktop() {
+# Choosing Desktop
+desktops=$(zenity --list --height=500 --width=450 --title="$title" --radiolist --text "Qual desktop você gostaria de instalar?" --column Select --column Desktop FALSE "gnome" FALSE "gnome gnome-extra" FALSE "plasma" FALSE "plasma kde-applications" FALSE "xfce4" FALSE "xfce4 xfce4-goodies" FALSE "lxde" FALSE "lxqt" FALSE "mate" FALSE "mate mate-extra" FALSE "budgie-desktop" FALSE "budgie-desktop gnome" FALSE "cinnamon" FALSE "deepin" FALSE "deepin deepin-extra" FALSE "enlightenment" FALSE "jwm" FALSE "i3-wm i3lock i3status" FALSE "i3-gaps i3status i3lock" FALSE "openbox tint2" FALSE "Look at more window managers")
+if [ "$desktops" = "Look at more window managers" ]
+then zenity --list --title="$title" --text="Vejas esses window managers. Você vai selecionar aquele que você quiser no próximo passo." --column View --width=450 --height=550 "$(pacman -Ss window manager)"
+wm=$(zenity --list --radiolist --height=500 --width=450 --column Select --column WM --title="$title" --radiolist --text="Qual window manager você gostaria de usar?" $(pacman -Ssq window manager | awk '{ printf " FALSE ""\0"$0"\0" }'))
+fi
+}
+
+displaymanager() {
+dm=$(zenity --list --title="$title" --radiolist  --height=500 --width=450 --text "Qual display manager você gostaria de usar?" --column "Select" --column "Display Manager" FALSE "lightdm" FALSE "lxdm" FALSE "sddm" FALSE "gdm" FALSE "default")
+}
+
+revengerepo() {
+zenity --question --title="$title"  --height=500 --width=450 --text="Você gostaria de adicionar o revenge_repo para o /etc/pacman.conf?\n O revenge_repo contém alguns pacotes extras, assim como spotify e pamac."
+rr="$?"
+}
+
+multilib() {
+zenity --question --height=500 --width=450 --title="$title" --text="Você gostaria de habilitar os repositórios multilib no seu sistema? Você pode precisar se você usa Steam, Wine, ou outros softwares de 32-bits."
+multilib="$?"
+}
+
+packagemanager() {
+zenity --question --title="$title" --height=500 --width=450 --text="Você gostaria de instalar um gerenciador de pacote gráfico? Isso vai permitir com que você instale e remova apps sem lidar com as linhas de comando." 
+pm="$?"
+if [ "$pm" = "0" ] 
+then zenity --info --title="$title" --height=500 --width=450 --text="Escolha octopi se você você está usando um desktop Qt assim como KDE ou LXQt. Escolha Pamac se você está usando um destkop GTK+. Se você está usando apenas um window manager, você pode selecionar qualquer um sem qualquer efeito prejudicial." 
+pack=$(zenity --list --radiolist --title="$title" --height=500 --width=450 --text="Qual gerenciador de pacotes você gostaria de instalar?" --column select --column "Package Manager" FALSE octopi FALSE pamac-aur) 
+fi
+}
+
+archuserrepo() {
+zenity --question --height=500 --width=450 --title="$title" --text "Você gostaria de instalar suporte ao Arch User Repository (AUR) 'yay'?"
+abs="$?"
+}
+
+# internet app list
+internet_apps() {
+zenity --list  --checklist --height=500 --width=450 --title="$title" --text "Selecione as Aplicações de Internet que você gostaria de instalar" --column "Select" --column "Applications" FALSE "chromium " FALSE "midori " FALSE "qupzilla " FALSE "netsurf " FALSE "filezilla " FALSE "opera " FALSE "evolution " FALSE "geary " FALSE "thunderbird " FALSE "transmission-gtk " FALSE "qbittorrent " FALSE "hexchat " > int2.txt
+sed -i -e 's/[|]//g' int2.txt
+}
+
+# media app list
+media_apps() {
+zenity --list --checklist  --height=500 --width=450 --title="$title" --text "Selecione as Aplicações de Mídia que você gostaria de instalar" --column "Select" --column "Applications" FALSE "kodi " FALSE "gimp " FALSE "vlc " FALSE "phonon-qt4-vlc " FALSE "totem " FALSE "parole " FALSE "audacious " FALSE "clementine " FALSE "gthumb " FALSE "shotwell " FALSE "ristretto " FALSE "gpicview " FALSE "brasero " FALSE "audacity " FALSE "simplescreenrecorder " FALSE "xfburn " FALSE "kdenlive " > med2.txt
+sed -i -e 's/[|]//g' med2.txt
+}
+
+# office app list
+office_apps() {
+zenity --list  --checklist --height=500 --width=450 --title="$title" --text "Selecione as Aplicações de Escritório que você gostaria de instalar" --column "Select" --column "Applications" FALSE "calligra " FALSE "abiword " FALSE "gnumeric " FALSE "pdfmod " FALSE "evince " FALSE "epdfview " FALSE "calibre " FALSE "fbreader " > off2.txt
+sed -i -e 's/[|]//g' off2.txt
+}
+
+# utility app list
+utility_apps() {
+zenity --list --checklist --height=500 --width=450 --title="$title" --text "Selecione as Aplicações de Utilidade que você gostaria de instalar" --column "Select" --column "Applications" FALSE "htop " FALSE "terminator " FALSE "gnome-disk-utility " FALSE "gparted " FALSE "partitionmanager " FALSE "synapse " FALSE "virtualbox " FALSE "gufw " FALSE "redshift " FALSE "leafpad " FALSE "geany " FALSE "parcellite " FALSE "grsync " FALSE "guake " FALSE "ntfs-3g " FALSE "btrfs-progs " FALSE "gptfdisk " FALSE "f2fs-tools " FALSE "exfat-utils " FALSE "wireguard-tools " FALSE "wireguard-dkms " FALSE "openvpn " FALSE "network-manager-applet " > utils.txt
+sed -i -e 's/[|]//g' utils.txt
+}
+
+customization_apps() {
+	zenity --list --checklist --height=500 --width=450 --title="$title" --text "Selecione as Aplicações de Customização que você gostaria de instalar" --column "Select" --column "Applications" FALSE "breeze-gtk " FALSE "materia-gtk-theme " FALSE "deepin-gtk-theme " FALSE "arc-gtk-theme " FALSE "adapta-gtk-theme " FALSE "elementary-icon-theme " FALSE "arc-icon-theme " FALSE "papirus-icon-theme " FALSE "qt5ct " FALSE "lxappearance-gtk3 " > cust.txt
+sed -i -e 's/[|]//g' cust.txt
+}
+# allowing user to select extra applications
+rank=$(curl -s "https://www.archlinux.org/mirrorlist/?country="$country"&protocol=https&use_mirror_status=on" | sed -e 's/^#Server/Server/' -e '/^#/d' | rankmirrors -n 10 -)
+echo -e "$rank" > /etc/pacman.d/mirrorlist
+pacman -Syy
+libreoffice() {
+zenity --question --height=500 --width=450 --title="$title" --text="Você gostaria de instalar libreoffice, uma alternativa open source do MS Office?"
+lbr="$?"
+if [ "$lbr" = "0" ]
+then lover=$(zenity --list --radiolist --height=500 --width=450 --text="Libreoffice-fresh é a versão mais atualizada do libreoffice, enquando Still é menos atualizada frequentemente" --column Select --column Version FALSE "fresh" FALSE "still")
+lolang=$(zenity --list --radiolist --height=500 --width=450 --column Select --column Langpack $(pacman -Ssq libreoffice-$lover lang | awk '{ printf " FALSE ""\0"$0"\0" }'))
+fi
+}
+
+firefox() {
+zenity --question --height=500 --width=450 --title="$title" --text="Você gostaria de instalar Firefox, um browser da fundação Mozilla?"
+frf="$?"
+if [ "$frf" = "0" ]
+then fflang=$(zenity --list --radiolist --height=500 --width=450 --column Select --column Langpack $(pacman -Ssq firefox lang  | awk '{ printf " FALSE ""\0"$0"\0" }'))
+fi
+}
+
+installapps() {
+extra=$(zenity --list --height=500 --width=450 --title="$title" --radiolist --text "If you would like to select more applications to install,\nChoose the category from the 
+list below.\nWhen you are finished selecting applications\nin each category you will be returned to this menu.\nThen simply select 'finished' when you are 
+finished." --column Select --column Category FALSE internet FALSE media FALSE office FALSE utilities FALSE customization FALSE finished)
+
+if [ "$extra" = "internet" ]
+	then internet_apps;installapps
+elif [ "$extra" = "media" ]
+	then media_apps;installapps
+elif [ "$extra" = "office" ]
+	then office_apps;installapps
+elif [ "$extra" = "utilities" ]
+	then utility_apps;installapps
+elif [ "$extra" = "customization" ]
+then customization_apps;installapps
+fi
+
+}
+
+# bootloader?
+bootloader() {
+lsblk -lno NAME,TYPE | grep 'disk' | awk '{print "/dev/" $1 " " $2}' | sort -u > devices.txt
+sed -i 's/\<disk\>//g' devices.txt
+devices=` awk '{print "FALSE " $0}' devices.txt `
+
+grub=$(zenity --question --height=500 --width=450 --title="$title" --text "Você gostaria de instalar the bootloader?\nThe answer to this is usually yes,\nunless you are dual-booting and plan to have another system handle\nthe boot process.")
+grb="$?"
+if [ "$grb" = "0" ]
+	then grub_device=$(zenity --list --radiolist --height=500 --width=450 --title="$title" --text "Onde você gostaria de instalar o bootloader?" --column Select --column Device $devices)
+zenity --question --text="Você tem outros sistemas operacionais que você quer que o grub detecte?"
+probe="$?"
+fi
+}
+
+# Installation
+installing() {
+zenity --question --height=500 --width=450 --title="$title" --text "Por favor clique em sim para começar a instalação.\nClique em não para abortar a instalação.\nTodos os pacotes vão ser baixados, então a instalação\npode levar uns minutos."
+
+if [ "$?" = "1" ]
+	then exit
+else (
+# sorting pacman mirrors
+echo "# Sorting fastest pacman mirrors..."
+rank=$(curl -s "https://www.archlinux.org/mirrorlist/?country="$country"&protocol=https&use_mirror_status=on" | sed -e 's/^#Server/Server/' -e '/^#/d' | rankmirrors -n 10 -)
+echo -e "$rank" > /etc/pacman.d/mirrorlist
+echo -e "$rank" > mirrors.txt
+# updating pacman cache
+echo "# Updating Pacman Cache..."
+pacman -Syy
+arch_chroot "pacman -Syy"
+
+#installing base
+echo "# Installing Base..."
+pacstrap /mnt base bash nano vim-minimal vi linux-firmware cryptsetup e2fsprogs findutils gawk inetutils iproute2 jfsutils licenses linux-firmware logrotate lvm2 man-db man-pages mdadm pciutils procps-ng reiserfsprogs sysfsutils xfsprogs usbutils
+if [ "$kernel" = "linux" ]
+	then pacstrap /mnt base base-devel linux
+elif [ "$kernel" = "linux-lts" ]
+	then pacstrap /mnt base linux-lts base-devel
+elif [ "$kernel" = "linux-hardened" ]
+	then pacstrap /mnt base linux-hardened base-devel
+elif [ "$kernel" = "linux-zen" ]
+	then pacstrap /mnt base linux-zen base-devel
+
+fi
+
+#generating fstab
+echo "# Generating File System Table..."
+genfstab -p /mnt >> /mnt/etc/fstab
+if grep -q "/mnt/swapfile" "/mnt/etc/fstab"; then
+sed -i '/swapfile/d' /mnt/etc/fstab
+echo "/swapfile		none	swap	defaults	0	0" >> /mnt/etc/fstab
+fi
+echo "10"
+# installing video and audio packages
+echo "# Installing Desktop, Sound, and Video Drivers..."
+pacstrap /mnt  mesa xorg-server xorg-apps xorg-xinit xorg-twm xterm xorg-drivers alsa-utils pulseaudio pulseaudio-alsa xf86-input-synaptics xf86-input-keyboard xf86-input-mouse xf86-input-libinput intel-ucode b43-fwcutter networkmanager nm-connection-editor network-manager-applet polkit-gnome ttf-dejavu gnome-keyring xdg-user-dirs gvfs
+echo "20"
+# virtualbox
+if [ "$vb" = "0" ]
+	then
+	if [ "$kernel" = "linux" ]
+		then pacstrap /mnt virtualbox-guest-modules-arch virtualbox-guest-utils
+        	echo -e "vboxguest\nvboxsf\nvboxvideo" > /mnt/etc/modules-load.d/virtualbox.conf
+	elif [ "$kernel" = "linux-lts" ]
+		then pacstrap /mnt virtualbox-guest-dkms virtualbox-guest-utils linux-lts-headers
+		echo -e "vboxguest\nvboxsf\nvboxvideo" > /mnt/etc/modules-load.d/virtualbox.conf
+	elif [ "$kernel" = "linux-hardened" ]
+		then pacstrap /mnt virtualbox-guest-dkms virtualbox-guest-utils linux-hardened-headers
+		echo -e "vboxguest\nvboxsf\nvboxvideo" > /mnt/etc/modules-load.d/virtualbox.conf
+	elif [ "$kernel" = "linux-zen" ]
+		then pacstrap /mnt virtualbox-guest-dkms virtualbox-guest-utils linux-zen-headers
+		echo -e "vboxguest\nvboxsf\nvboxvideo" > /mnt/etc/modules-load.d/virtualbox.conf
+	fi
+fi
+echo "30"
+
+# installing chosen desktop
+if [ "$desktops" = "Look at more window managers" ]
+then pacstrap /mnt $wm
+else pacstrap /mnt $desktops
+fi
+echo "40"
+# cups
+if [ "$cp" = "0" ]
+	then pacstrap /mnt ghostscript gsfonts system-config-printer gtk3-print-backends cups cups-pdf cups-filters
+arch_chroot "systemctl enable org.cups.cupsd.service"
+fi
+
+# enabling network manager
+arch_chroot "systemctl enable NetworkManager"
+echo "50"
+# adding revenge_repo
+if [ "$rr" = "0"  ]
+then 
+echo -e "\n[revenge_repo]" >> /mnt/etc/pacman.conf;echo "SigLevel = Optional TrustAll" >> /mnt/etc/pacman.conf;echo "Server = https://gitlab.com/spookykidmm/revenge_repo/raw/master/x86_64" >> /mnt/etc/pacman.conf;echo -e "Server = https://downloads.sourceforge.net/project/revenge-repo/revenge_repo/x86_64\n" >> /mnt/etc/pacman.conf
+arch_chroot "pacman -Syy"
+fi
+
+# installing pamac-aur
+if [ "$pm" = "0" ]
+then echo -e "\t[spooky_aur]" >> /mnt/etc/pacman.conf;echo "SigLevel = Optional TrustAll" >> /mnt/etc/pacman.conf;echo -e "Server = https://raw.github.com/spookykidmm/spooky_aur/master/x86_64\n" >> /mnt/etc/pacman.conf
+sudo pacman -Syy 
+arch_chroot "pacman -Syy"
+arch_chroot "pacman -S --noconfirm $pack"
+fi
+
+#multilib
+if [ "$multilib" = "0" ]
+then
+echo -e "\n[multilib]" >> /mnt/etc/pacman.conf;echo -e "Include = /etc/pacman.d/mirrorlist\n" >> /mnt/etc/pacman.conf
+fi
+
+# AUR
+if [ "$abs" = "0" ]
+	then if [ "$pm" = "0" ]
+		 then arch_chroot "pacman -Syy"
+		 	  arch_chroot "pacman -S --noconfirm yay"
+	else echo -e "\n[spooky_aur]" >> /mnt/etc/pacman.conf;echo "SigLevel = Optional TrustAll" >> /mnt/etc/pacman.conf;echo -e "Server = https://raw.github.com/spookykidmm/spooky_aur/master/x86_64\n" >> /mnt/etc/pacman.conf 
+    arch_chroot "pacman -Syy"
+	arch_chroot "pacman -S --noconfirm yay"
+	fi
+fi
+echo "60"
+
+# installing bootloader
+proc=$(grep -m1 vendor_id /proc/cpuinfo | awk '{print $3}')
+if [ "$proc" = "GenuineIntel" ]
+then pacstrap /mnt intel-ucode
+elif [ "$proc" = "AuthenticAMD" ]
+then arch_chroot "pacman -R --noconfirm intel-ucode"
+pacstrap /mnt amd-ucode
+fi
+if [ "$grb" = "0" ]
+	then if [ "$probe" = "0" ]
+		then pacstrap /mnt os-prober
+		fi 
+		if [ "$SYSTEM" = 'BIOS' ]
+		then echo "# Installing Bootloader..."
+		pacstrap /mnt grub
+		arch_chroot "grub-install --target=i386-pc $grub_device"
+		arch_chroot "grub-mkconfig -o /boot/grub/grub.cfg"
+	else
+		echo "# Installing Bootloader..."
+
+
+		if [ "$ans" = "Automatic Partitioning" ]
+			then root_part=${dev}2
+		fi
+
+		[[ $(echo $root_part | grep "/dev/mapper/") != "" ]] && bl_root=$root_part \
+		|| bl_root=$"PARTUUID="$(blkid -s PARTUUID ${root_part} | sed 's/.*=//g' | sed 's/"//g')
+
+		arch_chroot "bootctl --path=/boot install"
+		echo -e "default  Arch\ntimeout  10" > /mnt/boot/loader/loader.conf
+		[[ -e /mnt/boot/initramfs-linux.img ]] && echo -e "title\tArch Linux\nlinux\t/vmlinuz-linux\ninitrd\t/initramfs-linux.img\noptions\troot=${bl_root} rw" > /mnt/boot/loader/entries/Arch.conf
+		[[ -e /mnt/boot/initramfs-linux-lts.img ]] && echo -e "title\tArchLinux LTS\nlinux\t/vmlinuz-linux-lts\ninitrd\t/initramfs-linux-lts.img\noptions\troot=${bl_root} rw" > /mnt/boot/loader/entries/Arch-lts.conf
+		[[ -e /mnt/boot/initramfs-linux-hardened.img ]] && echo -e "title\tArch Linux hardened\nlinux\t/vmlinuz-linux-hardened\ninitrd\t/initramfs-linux-hardened.img\noptions\troot=${bl_root} rw" > /mnt/boot/loader/entries/Arch-hardened.conf
+		[[ -e /mnt/boot/initramfs-linux-zen.img ]] && echo -e "title\tArch Linux Zen\nlinux\t/vmlinuz-linux-zen\ninitrd\t/initramfs-linux-zen.img\noptions\troot=${bl_root} rw" > /mnt/boot/loader/entries/Arch-zen.conf
+		fi
+fi
+
+# running mkinit
+echo "# Running mkinitcpio..."
+arch_chroot "mkinitcpio -p $kernel"
+echo "70"
+
+# installing chosen software
+echo "# Installing chosen software packages..."
+# Making Variables from Applications Lists
+int=` cat int2.txt `
+med=` cat med2.txt `
+off=` cat off2.txt `
+utils=` cat utils.txt `
+cust=` cat cust.txt `
+
+
+# Installing Selecting Applications
+cp mirrors.txt /mnt/etc/pacman.d/mirrorlist
+arch_chroot "pacman -Syy"
+arch_chroot "pacman -S --noconfirm $int $med $off $utils $cust"
+if [ "$lbr" = "0" ]
+then arch_chroot "pacman -S --noconfirm libreoffice-$lover $lolang"
+fi
+if [ "$frf" = "0" ]
+then arch_chroot "pacman -S --noconfirm firefox  $fflang"
+fi
+echo "80"
+
+#root password
+echo "# Setting root password..."
+touch .passwd
+echo -e "$rtpasswd\n$rtpasswd2" > .passwd
+arch_chroot "passwd root" < .passwd >/dev/null
+rm .passwd
+
+#adding user
+echo "# Making new user..."
+arch_chroot "useradd -m -g users -G adm,lp,wheel,power,audio,video -s /bin/bash $username"
+touch .passwd
+echo -e "$userpasswd\n$userpasswd2" > .passwd
+arch_chroot "passwd $username" < .passwd >/dev/null
+rm .passwd
+
+#setting locale
+echo "# Generating Locale..."
+echo "LANG=\"${locale}\"" > /mnt/etc/locale.conf
+echo "${locale} UTF-8" > /mnt/etc/locale.gen
+arch_chroot "locale-gen"
+export LANG=${locale}
+
+#setting keymap
+mkdir -p /mnt/etc/X11/xorg.conf.d/
+echo -e 'Section "InputClass"\n\tIdentifier "system-keyboard"\n\tMatchIsKeyboard "on"\n\tOption "XkbLayout" "'$layout'"\n\tOption "XkbModel" "'$model'"\n\tOption "XkbVariant" ",'$variant'"\n\tOption "XkbOptions" "grp:alt_shift_toggle"\nEndSection' > /mnt/etc/X11/xorg.conf.d/00-keyboard.conf
+if [ "$map" = "1" ]
+then echo KEYMAP=$keymap >> /mnt/etc/vconsole.conf
+fi
+
+#setting timezone
+echo "# Setting Timezone..."
+arch_chroot "rm /etc/localtime"
+arch_chroot "ln -s /usr/share/zoneinfo/${zone}/${subzone} /etc/localtime"
+
+#setting hw clock
+echo "# Setting System Clock..."
+arch_chroot "hwclock --systohc --$clock"
+
+#setting hostname
+echo "# Setting Hostname..."
+arch_chroot "echo $hname > /etc/hostname"
+
+# setting n permissions
+echo "%wheel ALL=(ALL) ALL" >> /mnt/etc/sudoers
+
+# selecting shell
+if [ "$shell" = "zsh" ]
+then arch_chroot "pacman -S --noconfirm zsh zsh-syntax-highlighting zsh-completions grml-zsh-config;chsh -s /usr/bin/zsh $username"
+elif [ "$shell" = "bash" ]
+then arch_chroot "pacman -S --noconfirm bash;chsh -s /bin/bash $username"
+elif [ "$shell" = "fish" ]
+then arch_chroot "pacman -S --noconfirm fish;chsh -s /usr/bin/fish $username"
+fi
+echo "90"
+
+# starting desktop manager
+if [ "$dm"  = "default" ]
+then if [ "$desktop" == "gnome" ]
+	then arch_chroot "systemctl enable gdm.service"
+	elif [ "$desktop" = "budgie-desktop" ]
+	then pacstrap /mnt lightdm lightdm-gtk-greeter-settings lightdm-gtk-greeter gnome-control-center gnome-backgrounds;arch_chroot "systemctl enable lightdm.service"
+	elif [ "$desktop" = "lxde" ]
+	then pacstrap /mnt lxdm-gtk3;arch_chroot "systemctl enable lxdm.service"
+	elif [ "$desktop" == "plasma" ]
+	then pacstrap /mnt sddm;arch_chroot "systemctl enable sddm.service"
+	else pacstrap /mnt lightdm lightdm-gtk-greeter-settings lightdm-gtk-greeter
+	arch_chroot "systemctl enable lightdm.service"
+	fi
+elif [ "$dm" = "lightdm" ]
+then pacstrap /mnt lightdm lightdm-gtk-greeter lightdm-gtk-greeter-settings;arch_chroot "systemctl enable lightdm.service"
+else pacstrap /mnt $dm;arch_chroot "systemctl enable $dm.service"
+fi
+
+# unmounting partitions
+umount -R /mnt
+echo "100"
+echo "# Installation Finished!"
+) | zenity --progress --percentage=0 --title="$title" --width=450 --no-cancel
+fi
+}
+
+# execution
+# System Detection
+if [[ -d "/sys/firmware/efi/" ]]; then
+      SYSTEM="UEFI"
+      else
+      SYSTEM="BIOS"
+fi
+
+
+# Setting variables
+title="Zen Installer Framework 2.00 $SYSTEM"
+
+# Adapted from AIS. An excellent bit of code!
+arch_chroot() {
+    arch-chroot /mnt /bin/bash -c "${1}"
+}
+
+# Adapted from Feliz Installer
+Parted() {
+	parted --script $dev "$1"
+}
+# Greeting the user
+zenity --question --height=50--title="$title" --text "Bem-vindo ao Instalador Zen Arch.\n\nDaqui pra frente você vai receber uma série de perguntas que vão\nte guiar através da instalação do Arch Linux.\nVocê será solicitado, se você quer usar particionamento manual ou automático.\nSe você selecionar particionamento automático, a unidade que você selecionar vai ser completamente deletada\ne o Arch vai ser instalado. Se você selecionar particionamento manual, você vai ter a oportunidade de particionar o disco por você mesmo\ne selecionar quais partições usar para a instalação.\nClique 'sim' para iniciar ou 'no' para sair."
+
+if [ "$?" = "1" ]
+	then exit
+fi
+
+partition
+configure
+root_password
+user_password
+changeshell
+kernel
+vbox
+#nvidia
+revengerepo
+multilib
+packagemanager
+archuserrepo
+cups
+displaymanager
+desktop
+firefox
+libreoffice
+installapps
+bootloader
+installing
